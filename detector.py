@@ -20,7 +20,6 @@ def load_stamp_templates(stamps_dir: str) -> list[dict]:
 
 
 def _preprocess(image: np.ndarray) -> np.ndarray:
-    """Normalize image for better template matching."""
     if len(image.shape) == 3:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     else:
@@ -30,13 +29,14 @@ def _preprocess(image: np.ndarray) -> np.ndarray:
 
 
 def _detect_template(gray: np.ndarray, template: np.ndarray, threshold: float) -> dict | None:
-    """Multi-scale template matching. Returns best match or None."""
+    """Multi-scale template matching."""
     img_h, img_w = gray.shape
     t_h, t_w = template.shape
 
     best = {"val": 0.0, "loc": None, "size": (t_w, t_h)}
 
-    scales = np.linspace(0.4, 2.0, 25)
+    # 12 scales instead of 25 — 2x faster, still covers realistic size variation
+    scales = np.linspace(0.5, 1.5, 12)
     for scale in scales:
         new_w = int(t_w * scale)
         new_h = int(t_h * scale)
@@ -51,6 +51,10 @@ def _detect_template(gray: np.ndarray, template: np.ndarray, threshold: float) -
         if max_val > best["val"]:
             best = {"val": max_val, "loc": max_loc, "size": (new_w, new_h)}
 
+        # Early exit — no point searching further once we have a strong hit
+        if best["val"] >= 0.95:
+            break
+
     if best["val"] >= threshold and best["loc"] is not None:
         x, y = best["loc"]
         w, h = best["size"]
@@ -62,18 +66,19 @@ def _detect_template(gray: np.ndarray, template: np.ndarray, threshold: float) -
     return None
 
 
-def _detect_orb(gray: np.ndarray, template: np.ndarray, min_good_matches: int = 12) -> dict | None:
-    """ORB feature matching — robust to rotation and scale changes."""
-    orb = cv2.ORB_create(nfeatures=2000)
+def _detect_orb(gray: np.ndarray, template: np.ndarray, min_good_matches: int = 20) -> dict | None:
+    """ORB feature matching — stricter to avoid false positives."""
+    orb = cv2.ORB_create(nfeatures=1500)
     kp1, des1 = orb.detectAndCompute(template, None)
     kp2, des2 = orb.detectAndCompute(gray, None)
 
-    if des1 is None or des2 is None or len(des1) < 4 or len(des2) < 4:
+    if des1 is None or des2 is None or len(des1) < 8 or len(des2) < 8:
         return None
 
     bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
     matches = sorted(bf.match(des1, des2), key=lambda m: m.distance)
-    good = [m for m in matches if m.distance < 60]
+    # Stricter distance threshold (was 60, now 45)
+    good = [m for m in matches if m.distance < 45]
 
     if len(good) < min_good_matches:
         return None
@@ -106,10 +111,10 @@ def _detect_orb(gray: np.ndarray, template: np.ndarray, min_good_matches: int = 
     }
 
 
-def detect_stamps(image: np.ndarray, templates: list[dict], threshold: float = 0.75) -> list[dict]:
+def detect_stamps(image: np.ndarray, templates: list[dict], threshold: float = 0.82) -> list[dict]:
     """
-    Detect stamps in an image using template matching + ORB fallback.
-    Returns list of detections per template.
+    Detect stamps using template matching + ORB fallback.
+    Default threshold raised to 0.82 to reduce false positives.
     """
     gray = _preprocess(image)
     detections = []
@@ -117,10 +122,8 @@ def detect_stamps(image: np.ndarray, templates: list[dict], threshold: float = 0
     for tpl in templates:
         tpl_gray = _preprocess(tpl["image"])
 
-        # Try template matching first (faster)
         det = _detect_template(gray, tpl_gray, threshold)
 
-        # Fall back to ORB if template matching missed
         if det is None:
             det = _detect_orb(gray, tpl_gray)
 

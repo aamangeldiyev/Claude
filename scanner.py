@@ -2,13 +2,14 @@ import sys
 import cv2
 import numpy as np
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from detector import load_stamp_templates, detect_stamps
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
 PDF_EXTENSIONS = {".pdf"}
 
-# DPI for rendering PDF pages (150 is good balance of speed vs quality)
-PDF_DPI = 150
+# Lower DPI = faster rendering, still enough resolution for detection
+PDF_DPI = 120
 PDF_MATRIX_SCALE = PDF_DPI / 72
 
 
@@ -34,7 +35,7 @@ def _process_image_file(file_path: Path, templates: list[dict], threshold: float
 
 def _process_pdf_file(file_path: Path, templates: list[dict], threshold: float) -> list[dict]:
     try:
-        import fitz  # PyMuPDF
+        import fitz
     except ImportError:
         print(f"\n[WARN] PyMuPDF not installed — skipping PDF: {file_path.name}", file=sys.stderr)
         return []
@@ -56,7 +57,7 @@ def _process_pdf_file(file_path: Path, templates: list[dict], threshold: float) 
             elif pix.n == 1:
                 img_bgr = cv2.cvtColor(img_array, cv2.COLOR_GRAY2BGR)
             else:
-                img_bgr = img_array  # already RGB/BGR-ish; OpenCV handles it
+                img_bgr = img_array
 
             detections = detect_stamps(img_bgr, templates, threshold)
             if detections:
@@ -77,15 +78,24 @@ def _process_pdf_file(file_path: Path, templates: list[dict], threshold: float) 
     return results
 
 
+def _process_file(args: tuple) -> list[dict]:
+    file_path, templates, threshold = args
+    ext = file_path.suffix.lower()
+    if ext in PDF_EXTENSIONS:
+        return _process_pdf_file(file_path, templates, threshold)
+    return _process_image_file(file_path, templates, threshold)
+
+
 def scan_folder(
     root_folder: str | Path,
     stamps_dir: str | Path,
-    threshold: float = 0.75,
+    threshold: float = 0.82,
     verbose: bool = True,
+    workers: int = 4,
 ) -> list[dict]:
     """
     Recursively scan root_folder for images and PDFs and detect stamps.
-    Returns list of result dicts, one per file+page combination that has detections.
+    Uses a thread pool for parallel file processing.
     """
     root = Path(root_folder)
     templates = load_stamp_templates(str(stamps_dir))
@@ -107,20 +117,25 @@ def scan_folder(
         print(f"Found {len(all_files)} file(s) to process in '{root}'")
 
     results = []
-    for idx, file_path in enumerate(all_files, 1):
-        if verbose:
-            print(f"  [{idx:>4}/{len(all_files)}] {file_path.relative_to(root)}", end="\r")
+    completed = 0
 
-        ext = file_path.suffix.lower()
-        if ext in PDF_EXTENSIONS:
-            file_results = _process_pdf_file(file_path, templates, threshold)
-        else:
-            file_results = _process_image_file(file_path, templates, threshold)
-
-        results.extend(file_results)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(_process_file, (fp, templates, threshold)): fp
+            for fp in all_files
+        }
+        for future in as_completed(futures):
+            completed += 1
+            if verbose:
+                fp = futures[future]
+                print(f"  [{completed:>4}/{len(all_files)}] {fp.name[:60]}", end="\r")
+            try:
+                results.extend(future.result())
+            except Exception as exc:
+                print(f"\n[ERROR] {futures[future].name}: {exc}", file=sys.stderr)
 
     if verbose:
-        print()  # newline after progress line
+        print()
         files_with_stamps = len({r["file"] for r in results})
         total_hits = sum(len(r["detections"]) for r in results)
         print(f"Done. Files with stamps: {files_with_stamps} | Total detections: {total_hits}")

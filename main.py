@@ -45,8 +45,8 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "-t", "--threshold",
         type=float,
-        default=0.75,
-        help="Detection confidence threshold 0–1 (default: 0.75). Lower = more hits, more false positives.",
+        default=0.82,
+        help="Detection confidence threshold 0–1 (default: 0.82). Lower = more hits, more false positives.",
     )
     p.add_argument(
         "--stamps",
