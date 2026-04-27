@@ -21,6 +21,13 @@ from pathlib import Path
 from scanner import scan_folder
 from reporter import generate_report
 
+# When running as PyInstaller exe, look for stamps/ next to the executable.
+# When running as a Python script, look next to main.py.
+if getattr(sys, "frozen", False):
+    BASE_DIR = Path(sys.executable).parent
+else:
+    BASE_DIR = Path(__file__).parent
+
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
@@ -43,8 +50,8 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--stamps",
-        default="stamps",
-        help="Directory with reference stamp images (default: stamps/)",
+        default=str(BASE_DIR / "stamps"),
+        help="Directory with reference stamp images (default: stamps/ next to the exe)",
     )
     p.add_argument(
         "-q", "--quiet",
