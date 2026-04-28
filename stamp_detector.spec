@@ -1,48 +1,50 @@
 # PyInstaller spec — builds a standalone stamp_detector folder (no Python needed).
 #
 # Build command (run in project root with venv active):
-#   pyinstaller stamp_detector.spec
+#   pyinstaller stamp_detector.spec --clean --noconfirm
 #
-# Output: dist/stamp_detector/stamp_detector.exe  (Windows)
-#         dist/stamp_detector/stamp_detector       (Linux)
+# Output: dist/stamp_detector/stamp_detector(.exe)
+# Make sure models/stamp_detector.onnx exists before building.
 
-import sys
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 
 block_cipher = None
+project_root = Path(".").resolve()
 
-# Collect PyMuPDF binary data (fonts, etc.)
+# Bundle PyMuPDF assets
 fitz_datas = collect_data_files("fitz")
-fitz_libs  = collect_dynamic_libs("fitz")
+fitz_libs = collect_dynamic_libs("fitz")
+
+# Bundle ONNX Runtime native libs
+ort_datas = collect_data_files("onnxruntime")
+ort_libs = collect_dynamic_libs("onnxruntime")
+
+# Bundle our model + reference stamps directory
+extra_datas = []
+if (project_root / "models").exists():
+    extra_datas.append(("models", "models"))
+if (project_root / "stamps").exists():
+    extra_datas.append(("stamps", "stamps"))
 
 a = Analysis(
     ["main.py"],
-    pathex=[str(Path(".").resolve())],
-    binaries=fitz_libs,
-    datas=[
-        # Bundle stamp templates into the exe folder
-        ("stamps", "stamps"),
-        *fitz_datas,
-    ],
+    pathex=[str(project_root)],
+    binaries=fitz_libs + ort_libs,
+    datas=extra_datas + fitz_datas + ort_datas,
     hiddenimports=[
-        "fitz",
-        "fitz._fitz",
-        "openpyxl",
-        "openpyxl.styles",
-        "cv2",
-        "numpy",
+        "fitz", "fitz._fitz",
+        "openpyxl", "openpyxl.styles",
+        "cv2", "numpy", "tqdm",
+        "onnxruntime", "onnxruntime.capi._pybind_state",
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        "tkinter",
-        "matplotlib",
-        "scipy",
-        "pandas",
-        "IPython",
-        "jupyter",
+        "tkinter", "matplotlib", "scipy", "pandas",
+        "IPython", "jupyter", "torch", "torchvision",
+        "ultralytics",  # not needed at inference time
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -61,8 +63,8 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
-    console=True,   # keep console so progress is visible
+    upx=False,            # UPX can corrupt onnxruntime binaries — leave off
+    console=True,
 )
 
 coll = COLLECT(
@@ -71,7 +73,7 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name="stamp_detector",
 )

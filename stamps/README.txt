@@ -1,22 +1,20 @@
 STAMPS — Reference images for stamp detection
 =============================================
 
-Place your reference stamp images in this folder.
-Supported formats: .jpg, .jpeg, .png, .bmp, .tiff
+Place your stamp images here before running augment_stamps.py.
+Supported formats: .jpg, .jpeg, .png, .bmp
 
-Naming convention (example):
-  stamp_dsp.jpg          — "Для служебного пользования"
-  stamp_secret.jpg       — "Секретно"
-  stamp_top_secret.jpg   — "Совершенно секретно"
-
-Requirements for best detection:
-  - Scan/crop at the highest quality you have (300 DPI or better)
+Requirements for best results:
+  - Crop tightly around the stamp (minimal empty border)
   - White or near-white background
-  - The stamp should fill most of the image frame (crop tightly)
+  - 300 DPI or better if scanned; phone photo is fine too
   - Grayscale or colour — both work
 
-Each image in this folder becomes one "template".
-Multiple templates are all applied to every scanned file.
+One image per stamp type. Example:
+  stamp_dsp.png          — "Для служебного пользования"
+  stamp_secret.png       — "Секретно"
 
-To generate a synthetic test stamp (Latin placeholder):
-  python create_test_stamp.py
+After adding new stamps, retrain:
+  python train/augment_stamps.py
+  python train/train_model.py
+  build_windows.bat

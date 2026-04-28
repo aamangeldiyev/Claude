@@ -1,13 +1,22 @@
 @echo off
-REM Build standalone stamp_detector.exe for Windows
-REM Run this script on the machine that HAS Python + internet (dev machine).
-REM The output folder dist\stamp_detector\ is then copied to the target machine.
+REM Build standalone stamp_detector.exe for Windows.
+REM Run on a machine that has Python + internet (the dev machine).
+REM Output folder dist\stamp_detector\ is then copied to the target machine.
 
 echo ====================================================
-echo  Stamp Detector — PyInstaller build (Windows)
+echo  Stamp Detector  - PyInstaller build (Windows)
 echo ====================================================
 
-REM Create and activate virtual environment
+if not exist models\stamp_detector.onnx (
+    echo.
+    echo [WARN] models\stamp_detector.onnx does not exist yet.
+    echo        Build will succeed but the exe will not detect anything.
+    echo        Train the model first:
+    echo            python train\augment_stamps.py
+    echo            python train\train_model.py
+    echo.
+)
+
 if not exist venv (
     echo Creating virtual environment...
     python -m venv venv
@@ -26,14 +35,11 @@ pyinstaller stamp_detector.spec --clean --noconfirm
 echo.
 echo ====================================================
 echo  Build complete!
-echo  Executable folder: dist\stamp_detector\
+echo  Folder: dist\stamp_detector\
 echo.
-echo  To deploy on the target machine (no Python needed):
+echo  To deploy on a machine without Python:
 echo    1. Copy the entire dist\stamp_detector\ folder
-echo    2. Copy your stamp images into stamps\  (already bundled,
-echo       but you can add more next to stamp_detector.exe)
-echo    3. Run:
+echo    2. Run:
 echo       stamp_detector.exe C:\path\to\docs --output report.xlsx
 echo ====================================================
-
 pause

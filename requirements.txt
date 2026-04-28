@@ -1,4 +1,11 @@
+# Runtime dependencies (bundled into the .exe)
 opencv-python>=4.8.0
 PyMuPDF>=1.23.0
 numpy>=1.24.0
 openpyxl>=3.1.0
+onnxruntime>=1.16.0
+tqdm>=4.65.0
+
+# Training dependencies — only needed on the dev machine to run train/*.
+# Uncomment to install, or use: pip install ultralytics
+# ultralytics>=8.0.0
