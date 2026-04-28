@@ -6,13 +6,15 @@ Prerequisites:
 
 Run after generating the dataset:
     python train/augment_stamps.py
-    python train/train_model.py
+    python train/train_model.py            # fresh start
+    python train/train_model.py --resume   # continue after Ctrl+C
 
 Output:
-    runs/detect/train*/   ← Ultralytics training artefacts
+    runs/detect/stamp/   ← Ultralytics training artefacts
     models/stamp_detector.onnx  ← deployable model (~6 MB)
 """
 
+import argparse
 import shutil
 import sys
 from pathlib import Path
@@ -20,16 +22,21 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATASET_YAML = PROJECT_ROOT / "train" / "dataset.yaml"
 MODELS_DIR = PROJECT_ROOT / "models"
+LAST_CHECKPOINT = PROJECT_ROOT / "runs" / "detect" / "stamp" / "weights" / "last.pt"
 
-# Tweakable
-BASE_MODEL = "yolov8n.pt"   # nano: ~3 MB, good speed/quality balance
+BASE_MODEL = "yolov8n.pt"
 EPOCHS = 80
 IMG_SIZE = 640
 BATCH_SIZE = 16
-PATIENCE = 15               # early stopping patience
+PATIENCE = 15
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--resume", action="store_true",
+                        help="Resume training from last checkpoint (runs/detect/stamp/weights/last.pt)")
+    args = parser.parse_args()
+
     try:
         from ultralytics import YOLO
     except ImportError:
@@ -37,34 +44,39 @@ def main() -> None:
         print("        Run: pip install ultralytics", file=sys.stderr)
         sys.exit(1)
 
-    if not DATASET_YAML.exists():
-        print(f"[ERROR] Dataset config not found: {DATASET_YAML}", file=sys.stderr)
-        print("        Run: python train/augment_stamps.py first", file=sys.stderr)
-        sys.exit(1)
+    if args.resume:
+        if not LAST_CHECKPOINT.exists():
+            print(f"[ERROR] No checkpoint found at {LAST_CHECKPOINT}", file=sys.stderr)
+            print("        Start fresh: python train/train_model.py", file=sys.stderr)
+            sys.exit(1)
+        print(f"Resuming from {LAST_CHECKPOINT} ...")
+        model = YOLO(str(LAST_CHECKPOINT))
+        model.train(resume=True)
+    else:
+        if not DATASET_YAML.exists():
+            print(f"[ERROR] Dataset config not found: {DATASET_YAML}", file=sys.stderr)
+            print("        Run: python train/augment_stamps.py first", file=sys.stderr)
+            sys.exit(1)
 
-    dataset_root = PROJECT_ROOT / "train" / "datasets" / "images" / "train"
-    if not dataset_root.exists() or not any(dataset_root.iterdir()):
-        print(f"[ERROR] No training images found in {dataset_root}", file=sys.stderr)
-        print("        Run: python train/augment_stamps.py first", file=sys.stderr)
-        sys.exit(1)
+        dataset_root = PROJECT_ROOT / "train" / "datasets" / "images" / "train"
+        if not dataset_root.exists() or not any(dataset_root.iterdir()):
+            print(f"[ERROR] No training images in {dataset_root}", file=sys.stderr)
+            print("        Run: python train/augment_stamps.py first", file=sys.stderr)
+            sys.exit(1)
 
-    print(f"Training {BASE_MODEL} on {DATASET_YAML} for {EPOCHS} epochs...")
-    print(f"  Image size: {IMG_SIZE}")
-    print(f"  Batch:      {BATCH_SIZE}")
-    print()
-
-    model = YOLO(BASE_MODEL)
-    results = model.train(
-        data=str(DATASET_YAML),
-        epochs=EPOCHS,
-        imgsz=IMG_SIZE,
-        batch=BATCH_SIZE,
-        patience=PATIENCE,
-        project=str(PROJECT_ROOT / "runs" / "detect"),
-        name="stamp",
-        exist_ok=True,
-        verbose=True,
-    )
+        print(f"Training {BASE_MODEL} for {EPOCHS} epochs...")
+        model = YOLO(BASE_MODEL)
+        model.train(
+            data=str(DATASET_YAML),
+            epochs=EPOCHS,
+            imgsz=IMG_SIZE,
+            batch=BATCH_SIZE,
+            patience=PATIENCE,
+            project=str(PROJECT_ROOT / "runs" / "detect"),
+            name="stamp",
+            exist_ok=True,
+            verbose=True,
+        )
 
     print("\nExporting to ONNX...")
     onnx_path = model.export(
@@ -80,8 +92,8 @@ def main() -> None:
     shutil.copy(onnx_path, final_path)
     size_mb = final_path.stat().st_size / 1024 / 1024
     print(f"\nDone. Model written to {final_path} ({size_mb:.1f} MB)")
-    print(f"Training metrics: see {PROJECT_ROOT / 'runs' / 'detect' / 'stamp'}")
 
 
 if __name__ == "__main__":
     main()
+
