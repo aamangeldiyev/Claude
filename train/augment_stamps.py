@@ -152,9 +152,21 @@ def _augment_full_image(img: np.ndarray) -> np.ndarray:
     return img
 
 
+def _imread_unicode(path: Path, flags: int = cv2.IMREAD_UNCHANGED) -> np.ndarray | None:
+    """cv2.imread replacement that handles Unicode/Cyrillic paths on Windows."""
+    try:
+        data = path.read_bytes()
+        arr = np.frombuffer(data, dtype=np.uint8)
+        return cv2.imdecode(arr, flags)
+    except Exception:
+        return None
+
+
 def _save_jpeg(path: Path, img: np.ndarray) -> None:
     quality = random.randint(*JPEG_QUALITY_RANGE)
-    cv2.imwrite(str(path), img, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    if ok:
+        path.write_bytes(buf.tobytes())
 
 
 def _yolo_label(box: tuple[int, int, int, int], img_w: int, img_h: int) -> str:
@@ -235,7 +247,7 @@ def main() -> None:
     # Pre-load stamps as RGBA
     stamps_rgba = []
     for sp in stamp_files:
-        img = cv2.imread(str(sp), cv2.IMREAD_UNCHANGED)
+        img = _imread_unicode(sp, cv2.IMREAD_UNCHANGED)
         if img is None:
             print(f"[WARN] Cannot read {sp.name}, skipping", file=sys.stderr)
             continue

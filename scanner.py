@@ -42,8 +42,18 @@ def _worker_init(model_path: str, config: dict) -> None:
     _WORKER_CONFIG = config
 
 
+def _imread_unicode(path: Path) -> np.ndarray | None:
+    """cv2.imread that handles Unicode/Cyrillic paths on Windows."""
+    try:
+        data = path.read_bytes()
+        arr = np.frombuffer(data, dtype=np.uint8)
+        return cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    except Exception:
+        return None
+
+
 def _process_image(file_path: Path) -> list[dict]:
-    img = cv2.imread(str(file_path))
+    img = _imread_unicode(file_path)
     if img is None:
         return []
     if _WORKER_CONFIG.get("prefilter") and quick_reject(img):
