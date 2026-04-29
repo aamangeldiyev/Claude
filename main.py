@@ -63,12 +63,16 @@ def _run_cli(argv: list[str]) -> None:
 
 
 def main() -> None:
-    if "--cli" in sys.argv:
-        argv = [a for a in sys.argv[1:] if a != "--cli"]
-        _run_cli(argv)
-    else:
+    # No arguments → launch GUI. Any arguments → CLI mode.
+    # Explicit --gui flag forces GUI even with other args.
+    argv = sys.argv[1:]
+    if not argv or "--gui" in argv:
         from gui import main as gui_main
         gui_main()
+    else:
+        # Strip --cli if present (kept for backwards compatibility)
+        argv = [a for a in argv if a != "--cli"]
+        _run_cli(argv)
 
 
 if __name__ == "__main__":
