@@ -28,7 +28,7 @@ STAMPS_DIR = PROJECT_ROOT / "stamps"
 OUTPUT_ROOT = PROJECT_ROOT / "train" / "datasets"
 
 # Tweakable
-SAMPLES_PER_STAMP = 300        # how many augmented variants per stamp image
+SAMPLES_PER_STAMP = 40         # how many augmented variants per stamp image
 VAL_FRACTION = 0.15            # 15% goes to val split
 BG_SIZE_RANGE = (1200, 2000)   # synthetic page width/height range
 STAMP_SCALE_RANGE = (0.12, 0.55)  # stamp width as fraction of page width

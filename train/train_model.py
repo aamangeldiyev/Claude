@@ -25,10 +25,10 @@ MODELS_DIR = PROJECT_ROOT / "models"
 LAST_CHECKPOINT = PROJECT_ROOT / "runs" / "detect" / "stamp" / "weights" / "last.pt"
 
 BASE_MODEL = "yolov8n.pt"
-EPOCHS = 80
+EPOCHS = 25
 IMG_SIZE = 640
-BATCH_SIZE = 16
-PATIENCE = 15
+BATCH_SIZE = 8
+PATIENCE = 8
 
 
 def main() -> None:
