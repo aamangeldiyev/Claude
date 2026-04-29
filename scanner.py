@@ -227,11 +227,14 @@ def scan_folder(
     if progress_callback:
         progress_callback(0, len(pending), 0, "Starting...")
 
-    try:
-        from tqdm import tqdm
-        pbar = tqdm(total=len(pending), unit="file", smoothing=0.05)
-    except ImportError:
-        pbar = None
+    # Skip tqdm when GUI provides its own progress display
+    pbar = None
+    if progress_callback is None:
+        try:
+            from tqdm import tqdm
+            pbar = tqdm(total=len(pending), unit="file", smoothing=0.05)
+        except ImportError:
+            pass
 
     try:
         with ProcessPoolExecutor(

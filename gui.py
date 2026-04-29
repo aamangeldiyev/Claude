@@ -9,11 +9,19 @@ Run:
     stamp_detector.exe       (when packaged as windowed exe)
 """
 
+import io
 import os
 import queue
 import sys
 import threading
 from pathlib import Path
+
+# When running as windowed exe / pythonw, stdout/stderr are None.
+# tqdm and print() inside scanner.py will crash without these.
+if sys.stdout is None:
+    sys.stdout = io.StringIO()
+if sys.stderr is None:
+    sys.stderr = io.StringIO()
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk

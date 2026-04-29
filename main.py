@@ -11,8 +11,17 @@ Examples:
 """
 
 import argparse
+import io
 import os
 import sys
+
+# When running as a windowed exe (or via pythonw), stdout/stderr can be None.
+# tqdm and print() will crash with "NoneType has no attribute 'write'".
+# Replace with discard buffers so library code keeps working.
+if sys.stdout is None:
+    sys.stdout = io.StringIO()
+if sys.stderr is None:
+    sys.stderr = io.StringIO()
 from pathlib import Path
 
 if getattr(sys, "frozen", False):
