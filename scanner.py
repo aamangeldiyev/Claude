@@ -156,10 +156,15 @@ def scan_folder(
     pdf_dpi: int = PDF_DPI_DEFAULT,
     resume: bool = True,
     log_path: str | Path = "scan.log",
+    progress_callback=None,
+    cancel_event=None,
 ) -> int:
     """
     Scan root_folder recursively, write detections to Excel as they arrive.
     Returns total number of detections written.
+
+    progress_callback: optional callable(processed, total, hits, last_file) for UI updates.
+    cancel_event: optional threading.Event — if set, scan stops cleanly.
     """
     try:
         set_start_method("spawn", force=False)
@@ -210,12 +215,17 @@ def scan_folder(
 
     if not pending:
         print("Nothing left to process.")
+        if progress_callback:
+            progress_callback(0, 0, 0, "Nothing to process")
         return 0
 
     writer = StreamingExcelWriter(output_path)
     total_detections = 0
     processed = 0
     t_start = time.time()
+
+    if progress_callback:
+        progress_callback(0, len(pending), 0, "Starting...")
 
     try:
         from tqdm import tqdm
@@ -231,6 +241,11 @@ def scan_folder(
         ) as pool:
             futures = {pool.submit(_process_file, str(fp)): fp for fp in pending}
             for future in as_completed(futures):
+                if cancel_event is not None and cancel_event.is_set():
+                    print("\nCancellation requested...")
+                    for f in futures:
+                        f.cancel()
+                    break
                 try:
                     path_str, results, elapsed = future.result()
                 except Exception as exc:
@@ -247,6 +262,9 @@ def scan_folder(
                 if pbar:
                     pbar.set_postfix(hits=total_detections, refresh=False)
                     pbar.update(1)
+
+                if progress_callback:
+                    progress_callback(processed, len(pending), total_detections, Path(path_str).name)
 
                 if processed % 50 == 0:
                     _save_checkpoint(checkpoint_path, done)

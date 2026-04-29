@@ -28,11 +28,12 @@ a = Analysis(
         "fitz", "fitz._fitz",
         "openpyxl", "openpyxl.styles",
         "cv2", "numpy", "tqdm",
+        "tkinter", "tkinter.ttk", "tkinter.filedialog", "tkinter.messagebox",
     ],
     hookspath=[],
     runtime_hooks=[],
     excludes=[
-        "tkinter", "matplotlib", "scipy", "pandas",
+        "matplotlib", "scipy", "pandas",
         "IPython", "jupyter", "torch", "torchvision",
         "ultralytics", "onnxruntime",
     ],
@@ -49,7 +50,7 @@ exe = EXE(
     debug=False,
     strip=False,
     upx=False,
-    console=True,
+    console=False,   # windowed mode: double-click opens GUI without terminal
 )
 
 coll = COLLECT(
