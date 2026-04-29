@@ -1,12 +1,9 @@
 """
 Recursive folder scanner with multiprocessing, checkpoints, and streaming output.
 
-Designed for very large workloads (100k+ files): each worker process loads
-its own ONNX session; progress is checkpointed per-file so an interrupted
-run can resume.
-
-Public API:
-    scan_folder(root, model_path, output_path, ...) -> int (number of detections)
+Designed for large workloads (100k+ files). Each worker process loads its own
+copy of templates; progress is checkpointed per-file so an interrupted run
+can resume without reprocessing completed files.
 """
 
 import json
@@ -22,28 +19,27 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from detector import DEFAULT_IMGSZ, DEFAULT_THRESHOLD, detect_stamps, load_onnx_model, quick_reject
+from detector import DEFAULT_THRESHOLD, detect_stamps, load_templates
 from reporter import StreamingExcelWriter
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
 PDF_EXTENSIONS = {".pdf"}
 
+PDF_DPI_DEFAULT = 100  # fast default; use --pdf-dpi 150 for higher quality
+
 # Per-worker globals — initialised once per process via _worker_init
-_WORKER_SESSION = None
+_WORKER_TEMPLATES: list[dict] = []
 _WORKER_CONFIG: dict = {}
 
 
-def _worker_init(model_path: str, config: dict) -> None:
-    """Runs once per worker process. Loads ONNX session into a global."""
-    global _WORKER_SESSION, _WORKER_CONFIG
-    # Ignore SIGINT in workers — let the parent handle Ctrl+C
+def _worker_init(stamps_dir: str, config: dict) -> None:
     signal.signal(signal.SIGINT, signal.SIG_IGN)
-    _WORKER_SESSION = load_onnx_model(model_path)
+    global _WORKER_TEMPLATES, _WORKER_CONFIG
+    _WORKER_TEMPLATES = load_templates(stamps_dir)
     _WORKER_CONFIG = config
 
 
 def _imread_unicode(path: Path) -> np.ndarray | None:
-    """cv2.imread that handles Unicode/Cyrillic paths on Windows."""
     try:
         data = path.read_bytes()
         arr = np.frombuffer(data, dtype=np.uint8)
@@ -56,14 +52,7 @@ def _process_image(file_path: Path) -> list[dict]:
     img = _imread_unicode(file_path)
     if img is None:
         return []
-    if _WORKER_CONFIG.get("prefilter") and quick_reject(img):
-        return []
-    detections = detect_stamps(
-        img,
-        _WORKER_SESSION,
-        threshold=_WORKER_CONFIG["threshold"],
-        imgsz=_WORKER_CONFIG["imgsz"],
-    )
+    detections = detect_stamps(img, _WORKER_TEMPLATES, _WORKER_CONFIG["threshold"])
     if not detections:
         return []
     return [{
@@ -83,25 +72,22 @@ def _process_pdf(file_path: Path) -> list[dict]:
     except ImportError:
         return []
 
+    dpi = _WORKER_CONFIG.get("pdf_dpi", PDF_DPI_DEFAULT)
+    mat_scale = dpi / 72.0
     results = []
-    dpi = _WORKER_CONFIG["pdf_dpi"]
-    matrix_scale = dpi / 72.0
-    do_prefilter = _WORKER_CONFIG.get("prefilter", False)
 
     try:
         doc = fitz.open(str(file_path))
     except Exception as exc:
-        logging.exception(f"Failed to open PDF {file_path}: {exc}")
+        logging.error(f"Cannot open PDF {file_path}: {exc}")
         return []
 
     try:
-        import fitz as _fitz
-        mat = _fitz.Matrix(matrix_scale, matrix_scale)
+        mat = fitz.Matrix(mat_scale, mat_scale)
         total = len(doc)
         for page_num in range(total):
             try:
-                page = doc[page_num]
-                pix = page.get_pixmap(matrix=mat)
+                pix = doc[page_num].get_pixmap(matrix=mat)
                 arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
                 if pix.n == 4:
                     img = cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
@@ -110,15 +96,7 @@ def _process_pdf(file_path: Path) -> list[dict]:
                 else:
                     img = arr
 
-                if do_prefilter and quick_reject(img):
-                    continue
-
-                detections = detect_stamps(
-                    img,
-                    _WORKER_SESSION,
-                    threshold=_WORKER_CONFIG["threshold"],
-                    imgsz=_WORKER_CONFIG["imgsz"],
-                )
+                detections = detect_stamps(img, _WORKER_TEMPLATES, _WORKER_CONFIG["threshold"])
                 if detections:
                     results.append({
                         "file": str(file_path),
@@ -130,36 +108,32 @@ def _process_pdf(file_path: Path) -> list[dict]:
                         "detections": detections,
                     })
             except Exception as exc:
-                logging.exception(f"Page {page_num + 1} of {file_path} failed: {exc}")
+                logging.error(f"{file_path} page {page_num + 1}: {exc}")
     finally:
         doc.close()
 
     return results
 
 
-def _process_file(file_path_str: str) -> tuple[str, list[dict], float]:
-    """Worker entry point. Returns (path, results, elapsed_seconds)."""
-    fp = Path(file_path_str)
+def _process_file(path_str: str) -> tuple[str, list[dict], float]:
+    fp = Path(path_str)
     t0 = time.time()
     try:
-        ext = fp.suffix.lower()
-        if ext in PDF_EXTENSIONS:
+        if fp.suffix.lower() in PDF_EXTENSIONS:
             results = _process_pdf(fp)
         else:
             results = _process_image(fp)
     except Exception as exc:
-        logging.exception(f"{fp}: {exc}")
+        logging.error(f"{fp}: {exc}")
         results = []
-    return file_path_str, results, time.time() - t0
+    return path_str, results, time.time() - t0
 
 
 def _load_checkpoint(path: Path) -> set[str]:
     if not path.exists():
         return set()
     try:
-        with open(path) as f:
-            data = json.load(f)
-        return set(data.get("done", []))
+        return set(json.loads(path.read_text()).get("done", []))
     except Exception:
         return set()
 
@@ -167,8 +141,7 @@ def _load_checkpoint(path: Path) -> set[str]:
 def _save_checkpoint(path: Path, done: set[str]) -> None:
     tmp = path.with_suffix(".tmp")
     try:
-        with open(tmp, "w") as f:
-            json.dump({"done": sorted(done)}, f)
+        tmp.write_text(json.dumps({"done": sorted(done)}))
         os.replace(tmp, path)
     except Exception as exc:
         logging.warning(f"Checkpoint save failed: {exc}")
@@ -176,31 +149,27 @@ def _save_checkpoint(path: Path, done: set[str]) -> None:
 
 def scan_folder(
     root_folder: str | Path,
-    model_path: str | Path,
+    stamps_dir: str | Path,
     output_path: str | Path,
     threshold: float = DEFAULT_THRESHOLD,
-    imgsz: int = DEFAULT_IMGSZ,
     workers: int | None = None,
-    pdf_dpi: int = 150,
-    prefilter: bool = False,
+    pdf_dpi: int = PDF_DPI_DEFAULT,
     resume: bool = True,
     log_path: str | Path = "scan.log",
 ) -> int:
     """
-    Scan a folder recursively and write detections to an Excel report as they
-    arrive. Returns the total number of detections written.
+    Scan root_folder recursively, write detections to Excel as they arrive.
+    Returns total number of detections written.
     """
     try:
         set_start_method("spawn", force=False)
     except RuntimeError:
-        pass  # already set
+        pass
 
     root = Path(root_folder).resolve()
     output_path = Path(output_path).resolve()
-    log_path = Path(log_path).resolve()
     checkpoint_path = output_path.with_suffix(output_path.suffix + ".checkpoint.json")
 
-    # Reset logger handlers to avoid duplicates on re-runs
     for h in list(logging.root.handlers):
         logging.root.removeHandler(h)
     logging.basicConfig(
@@ -212,42 +181,40 @@ def scan_folder(
     if workers is None:
         workers = max(1, (os.cpu_count() or 2) - 1)
 
-    config = {
-        "threshold": threshold,
-        "imgsz": imgsz,
-        "pdf_dpi": pdf_dpi,
-        "prefilter": prefilter,
-    }
+    # Validate stamps
+    templates = load_templates(str(stamps_dir))
+    if not templates:
+        print(f"[ERROR] No stamp images found in '{stamps_dir}'.", file=sys.stderr)
+        print( "        Add PNG/JPG screenshots of stamps there.", file=sys.stderr)
+        return 0
+    print(f"Loaded {len(templates)} stamp template(s).")
+
+    config = {"threshold": threshold, "pdf_dpi": pdf_dpi}
 
     # Discover files
-    print(f"Scanning {root} for files...")
+    print(f"Scanning {root} ...")
     all_files = [
         f for f in root.rglob("*")
         if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS | PDF_EXTENSIONS
     ]
-    print(f"  Total candidate files: {len(all_files):,}")
+    print(f"  Total files found : {len(all_files):,}")
 
-    done: set[str] = set()
-    if resume:
-        done = _load_checkpoint(checkpoint_path)
-        if done:
-            print(f"  Resuming: {len(done):,} files already processed")
+    done: set[str] = _load_checkpoint(checkpoint_path) if resume else set()
+    if done:
+        print(f"  Already processed : {len(done):,} (resuming)")
 
     pending = [f for f in all_files if str(f) not in done]
-    print(f"  Files to process now: {len(pending):,}")
-    print(f"  Workers: {workers}")
-    print(f"  Model: {model_path}")
-    print(f"  Output: {output_path}")
-    print(f"  Log: {log_path}")
+    print(f"  To process now    : {len(pending):,}")
+    print(f"  Workers           : {workers}  |  PDF DPI: {pdf_dpi}  |  Threshold: {threshold}")
     print()
 
     if not pending:
-        print("Nothing to do.")
+        print("Nothing left to process.")
         return 0
 
     writer = StreamingExcelWriter(output_path)
     total_detections = 0
-    processed_now = 0
+    processed = 0
     t_start = time.time()
 
     try:
@@ -260,48 +227,45 @@ def scan_folder(
         with ProcessPoolExecutor(
             max_workers=workers,
             initializer=_worker_init,
-            initargs=(str(model_path), config),
+            initargs=(str(stamps_dir), config),
         ) as pool:
             futures = {pool.submit(_process_file, str(fp)): fp for fp in pending}
-
             for future in as_completed(futures):
                 try:
-                    fp_str, results, elapsed = future.result()
+                    path_str, results, elapsed = future.result()
                 except Exception as exc:
-                    logging.exception(f"Worker failure: {exc}")
+                    logging.error(f"Worker error: {exc}")
                     continue
 
-                done.add(fp_str)
-                processed_now += 1
+                done.add(path_str)
+                processed += 1
 
                 for r in results:
                     writer.add_detection(r)
                     total_detections += len(r["detections"])
 
-                if pbar is not None:
+                if pbar:
                     pbar.set_postfix(hits=total_detections, refresh=False)
                     pbar.update(1)
 
-                # Periodic checkpoint flush
-                if processed_now % 50 == 0:
+                if processed % 50 == 0:
                     _save_checkpoint(checkpoint_path, done)
 
-                if elapsed > 30:
-                    logging.info(f"Slow file ({elapsed:.1f}s): {fp_str}")
+                if elapsed > 60:
+                    logging.info(f"Slow file ({elapsed:.0f}s): {path_str}")
 
     except KeyboardInterrupt:
-        print("\nInterrupted. Saving progress…")
+        print("\nInterrupted — saving progress...")
     finally:
-        if pbar is not None:
+        if pbar:
             pbar.close()
         _save_checkpoint(checkpoint_path, done)
         writer.close()
 
     elapsed_total = time.time() - t_start
-    print(f"\nProcessed {processed_now:,} files in {elapsed_total/60:.1f} minutes")
-    print(f"Detections written: {total_detections:,}")
-    print(f"Report: {output_path}")
-    if pending and processed_now < len(pending):
-        print(f"Resume by running again with --resume (default).")
+    print(f"\nProcessed {processed:,} files in {elapsed_total / 60:.1f} min")
+    print(f"Detections: {total_detections:,}  |  Report: {output_path}")
+    if processed < len(pending):
+        print("Run again to resume from where it stopped.")
 
     return total_detections
